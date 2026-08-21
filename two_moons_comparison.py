@@ -19,6 +19,7 @@ from pyro.infer.autoguide import (
     AutoMultivariateNormal,
     AutoNormal,
     init_to_value,
+    init_to_sample,
 )
 from pyro.optim import ClippedAdam, SGD
 from torch import Tensor
@@ -284,6 +285,7 @@ class BayesianMLP(pyro.nn.PyroModule):
         )
         self._laplace_guide = None
         self._mvn_guide = None
+        self._normal_guide = None
         self._w_map: Tensor | None = None
         self._sigma: Tensor | None = None
 
@@ -332,6 +334,11 @@ class BayesianMLP(pyro.nn.PyroModule):
         return self._mvn_guide
 
     @property
+    def normal_guide(self) -> AutoNormal:
+        """Laplace Approximation guide."""
+        return self._normal_guide
+
+    @property
     def w_map(self) -> Tensor | None:
         """W_map."""
         return self._w_map
@@ -355,6 +362,13 @@ class BayesianMLP(pyro.nn.PyroModule):
             init_loc_fn=self.init_loc_fn_guides(),
         )
 
+    def init_normal_guide(self) -> None:
+        """Initialize the normal guide."""
+        self._normal_guide = AutoNormal(
+            model=self.model,
+            init_loc_fn=self.init_loc_fn_guides(),
+        )
+
     def init_loc_fn_guides(self) -> callable:
         """Init loc function for guides."""
         return init_to_value(
@@ -369,6 +383,7 @@ class BayesianMLP(pyro.nn.PyroModule):
         """Initialize the guides."""
         self.init_laplace_guide()
         self.init_mvn_guide()
+        self.init_normal_guide()
 
     def set_w_map(self) -> None:
         """Set w_map values."""
@@ -464,7 +479,8 @@ def main() -> None:
     # 2. MCMC
     kernel = NUTS(
         bnn.model,
-        init_strategy=bnn.init_to_w_map(),
+        init_strategy=init_to_sample(),
+        # init_strategy=bnn.init_to_w_map(),
     )
     mcmc = MCMC(
         kernel,

@@ -9,9 +9,17 @@
   Networks*, ICLR. Source of the prior-precision tuning idea — [Q1](open-questions.md#q1).
   <https://openreview.net/forum?id=Skdvd2xAZ> · local: `literature/Ritter et al - 2018 -
   A Scalable Laplace Approximation for Neural Networks.pdf`
-- **MacKay (1992)** — *The Evidence Framework Applied to Classification Networks*.
-  Origin of the probit approximation `sigmoid(m/sqrt(1+πv/8))` used in
-  `Model.predict` — [I5](gotchas/hessian-scaling.md).
+- **MacKay (1992a)** — *A Practical Bayesian Framework for Backpropagation Networks*,
+  Neural Computation 4(3), 448–472. The evidence framework itself: Gaussian weight
+  prior, Hessian at the MAP, and hyperparameter (prior precision) tuning by evidence
+  maximisation — the ancestor of [Q1](open-questions.md#q1).
+  <https://doi.org/10.1162/neco.1992.4.3.448> · local: `literature/MacKay - 1992 -
+  Practical Bayesian framework for backpropagation networks.pdf`
+- **MacKay (1992b)** — *The Evidence Framework Applied to Classification Networks*,
+  Neural Computation 4(5), 720–736. Origin of the probit approximation
+  `sigmoid(m/sqrt(1+πv/8))` used in `Model.predict` — [I5](gotchas/hessian-scaling.md).
+  **Not held locally** — this is the classification paper, distinct from 1992a above;
+  the code comment in `two_moons_comparison.py` points here.
   <https://doi.org/10.1162/neco.1992.4.5.720>
 - **Daxberger et al. (2021)** — *Laplace Redux — Effortless Bayesian Deep Learning*,
   NeurIPS. The `laplace-torch` paper; survey of Laplace variants — [Q6](open-questions.md#q6).

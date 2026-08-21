@@ -129,3 +129,6 @@ dmypy.json
 .pyre/
 
 .DS_Store
+
+# Literature PDFs — copied from the UQHM vault (06_Literature), not redistributable
+literature/

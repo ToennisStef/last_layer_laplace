@@ -32,18 +32,20 @@ Add held-out NLL, ECE / reliability diagrams, and an OOD confidence measure
 [M2](methods/laplace-vs-vi-vs-mcmc.md) and [M4](lessons-methodology.md) stay
 qualitative and "over/underconfident" is an impression, not a result.
 
-## Q4 — Same predictive estimator for all three methods
-*Status: not done.*
-LLLA is currently scored with the probit approximation, VI/MCMC with sampled
-sigmoids. Re-score LLLA by drawing from its Gaussian posterior so all three use the
-identical predictive. Cheap; should be done **before** trusting
-[M2](methods/laplace-vs-vi-vs-mcmc.md).
+## Q4 — Same predictive estimator for all methods
+*Status: **DONE** (2026-08-21) — see [decision 0009](decisions/0009-uniform-sampled-predictive.md).*
+`two_moons_comparison.py` now scores all four methods by sampling weights and
+averaging sigmoids, so the maps differ only through the posterior. The paper's
+`Model.predict` keeps the probit form for reproducing the original figure.
 
 ## Q5 — MCMC convergence audit
-*Status: `mcmc.summary()` printed, not systematically checked.*
-Record `r_hat`, ESS, divergences; check the pair plot for chains that never left
-`w_map`. If MCMC is not converged, the whole ordering in
-[M2](methods/laplace-vs-vi-vs-mcmc.md) is unsafe. See [I6](gotchas/mcmc-setup.md).
+*Status: **DONE** (2026-08-21).*
+NUTS is seeded with `init_to_sample()` (not the MAP), 5 chains x 500 draws:
+`r_hat` <= 1.0036, `n_eff` 1270-2122 of 2500, **0 divergences**, and the numbers
+reproduce across an independent 4-chain run. The chains are converged, so
+[M2](methods/laplace-vs-vi-vs-mcmc.md) can be trusted — and the *old* M3 conclusion,
+which came from `w_map`-seeded chains, is retracted. Diagnostics are saved to
+`artifacts/mcmc_diagnostics.json` on every run.
 
 ## Q6 — `laplace-torch` as a cross-check
 *Status: not used.*
@@ -56,3 +58,14 @@ The asymptotic overconfidence result may simply not be what a bounded 2-D grid t
 — see [M5](methods/reproduction-scope.md). Possible alternative framings: GP-limit
 comparison, deep ensembles as a second reference, or an explicit far-field
 (`‖x‖ = 10, 100, 1000`) confidence sweep, which is what the theorem is actually about.
+
+## Q8 — Does a tighter prior close the Laplace/NUTS gap?
+*Status: predicted, not run.*
+[M6](methods/mode-vs-typical-set.md) says the typical set sits at radius
+`prior_scale * sqrt(d)` = 44.72 * 4.47 ~ 200 while the mode is at 17. Shrinking
+`prior_scale` should pull the shell toward the mode and shrink the Laplace-vs-NUTS
+disagreement; it should also raise the likelihood's share of the Hessian.
+→ Sweep `Config.var0` over a few decades and plot mean confidence per method.
+Cheap, and it is a real prediction that could fail — which makes it the most
+informative next run. Connects [M1](methods/prior-scale-calibration.md),
+[M6](methods/mode-vs-typical-set.md), and [Q1](#q1).

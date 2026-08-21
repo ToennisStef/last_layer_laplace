@@ -1,6 +1,6 @@
 # 0007 — LLLA scored with the probit approximation
 
-**Status:** Accepted, to be revisited · **Date:** 2026-08-18
+**Status:** Accepted for the paper reproduction; superseded by [0009](0009-uniform-sampled-predictive.md) for the comparison script · **Date:** 2026-08-18
 
 ## Context
 Turning a Gaussian over logits into a class probability requires

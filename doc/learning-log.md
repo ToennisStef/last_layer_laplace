@@ -74,6 +74,38 @@ Files: `two_moons_ll_MCMC.ipynb`, `two_moons_ll_Laplace_MCMC.ipynb`,
   far wider than the true posterior along weakly-determined directions" is a
   general claim. **Do not promote it until [Q5](open-questions.md#q5) is done.**
 
+## 2026-08-21 — the comparison becomes a script, and M3 is retracted
+Files: `two_moons_comparison.py` (main rewritten), `artifacts/`, `figures/`,
+baseline kept in `artifacts_run1_4chains/`.
+
+- Cleaned out seven superseded notebooks; turned the notebook comparison into a
+  reproducible script with a `Config`, saved artifacts and SVG figures
+  ([0010](decisions/0010-artifacts-and-figures-layout.md)).
+- Scored all four methods with one sampled predictive, closing
+  [Q4](open-questions.md#q4) ([0009](decisions/0009-uniform-sampled-predictive.md)).
+- Switched NUTS to `init_to_sample()` and ran 4, then 5 chains. Diagnostics are
+  clean: `r_hat` <= 1.004, `n_eff` 1270-2122, 0 divergences — [Q5](open-questions.md#q5) closed.
+- **Result: NUTS sits between Laplace and VI** (0.616 / 0.845 / ~0.91), reproducing
+  across both runs. This **contradicts** the 2026-08-20 conclusion.
+- Diagnosis: not a bloated covariance. Laplace's `Sigma` is ~the prior (8/20
+  curvature directions at prior level, sd = 62% of prior scale) *and* its centre
+  sits at `\|\|w\|\| = 17` while the posterior mass is a shell at ~198
+  ([M6](methods/mode-vs-typical-set.md)).
+- Checked the obvious objection: the pair plot appears to cover `w_map`, and it
+  does — in **all 20 marginals**. The nearest of 2000 draws is still 81.8 away.
+  Marginals cannot reveal joint distance.
+- Two implementation lessons: [I7](gotchas/windows-multiprocessing-mcmc.md) (Windows
+  spawn needs a `__main__` guard or chains silently collapse to one) and I8
+  (`AutoNormal` has no `get_posterior()`).
+- Found while reading the paper's code: its training uses **mean**-reduced BCE with
+  `weight_decay` as the prior, so the MAP is fitted at `var0_eff = 1/(N*lambda) = 10`
+  while the Hessian uses `var0 = 2000` — a factor of ~200. Our Pyro port is a factor
+  of 2 off for the same reason (model prior + optimizer weight decay both applied).
+- **Transferable?** yes, and important: mode-vs-typical-set is a claim about any
+  moderately high-dimensional posterior, not about this dataset. Owed a concept note
+  outside the repo. The retraction is transferable too — *seeding MCMC at the MAP
+  can manufacture the appearance of a narrow posterior*.
+
 ## Open at end of 2026-08-20
 The comparison is not yet trustworthy enough to conclude anything about LLLA:
 same-estimator scoring ([Q4](open-questions.md#q4)), MCMC convergence audit

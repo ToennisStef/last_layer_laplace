@@ -1,0 +1,34 @@
+{
+  "config": {
+    "seed": 7777,
+    "n_train": 200,
+    "noise": 0.1,
+    "grid_lim": 5.0,
+    "grid_n": 100,
+    "h": 20,
+    "k": 1,
+    "var0": 2000.0,
+    "map_steps": 5000,
+    "map_lr": 0.001,
+    "map_momentum": 0.9,
+    "map_weight_decay": 0.0005,
+    "vi_steps": 10000,
+    "vi_lr": 0.01,
+    "vi_particles": 8,
+    "mcmc_samples": 500,
+    "mcmc_warmup": 1000,
+    "mcmc_chains": 4,
+    "pred_samples": 1000,
+    "pred_chunk": 2500,
+    "artifact_dir": "artifacts",
+    "figure_dir": "figures"
+  },
+  "created": "2026-08-21T13:07:55+00:00",
+  "versions": {
+    "python": "3.12.11",
+    "torch": "2.13.0+cpu",
+    "pyro": "1.9.1",
+    "numpy": "2.5.2"
+  },
+  "default_dtype": "torch.float64"
+}

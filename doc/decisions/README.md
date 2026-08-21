@@ -21,3 +21,5 @@ Template: [_template.md](_template.md).
 | [0006](0006-nuts-as-ground-truth.md) | NUTS treated as the reference posterior for the comparison | Accepted, contested |
 | [0007](0007-probit-predictive.md) | LLLA scored with the probit approximation | Accepted, to be revisited |
 | [0008](0008-notes-live-in-repo.md) | Notes that die with the code live in `doc/`; nothing here mirrors a vault | Accepted |
+| [0009](0009-uniform-sampled-predictive.md) | Score all four methods with the same sampled predictive | Accepted, supersedes 0007 for the comparison |
+| [0010](0010-artifacts-and-figures-layout.md) | Runs persist to `artifacts/`, figures to `figures/` | Accepted |

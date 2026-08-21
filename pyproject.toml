@@ -1,0 +1,13 @@
+[project]
+name = "last-layer-laplace"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "ipykernel>=7.3.0",
+    "matplotlib>=3.11.1",
+    "seaborn>=0.13.2",
+    "torch",
+    "pyro-ppl",
+]

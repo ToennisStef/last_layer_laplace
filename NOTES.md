@@ -11,6 +11,7 @@ Routing pass (when a run finishes, or Friday — whichever actually happens):
 | what a run showed | [doc/learning-log.md](doc/learning-log.md) |
 | a library trap | [doc/lessons-implementation.md](doc/lessons-implementation.md) + a `doc/gotchas/` file |
 | what a method actually does | [doc/lessons-methodology.md](doc/lessons-methodology.md) + a `doc/methods/` file |
+| what the experiment *is* (architecture, arm/config definitions, parameter counts) | [doc/setup/](doc/setup/) |
 | something I should try | [doc/open-questions.md](doc/open-questions.md) |
 | true regardless of this codebase | outside the repo (vault / AI-OS) — see [0008](doc/decisions/0008-notes-live-in-repo.md) |
 

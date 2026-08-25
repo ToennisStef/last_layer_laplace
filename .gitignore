@@ -142,4 +142,7 @@ sweeps/**/*.pt
 ablations/**/*.pt
 !ablations/**/run.log
 
-.svg
+*.svg
+*.json
+*.csv
+*.log

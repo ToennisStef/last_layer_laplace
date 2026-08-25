@@ -21,6 +21,24 @@
   **Not held locally** — this is the classification paper, distinct from 1992a above;
   the code comment in `two_moons_comparison.py` points here.
   <https://doi.org/10.1162/neco.1992.4.5.720>
+- **Martens & Grosse (2015)** — *Optimizing Neural Networks with Kronecker-factored
+  Approximate Curvature*, ICML. KFAC — the Kronecker factorisation the paper's
+  `llla.py` / `kfla.py` rely on — [M7](methods/curvature-approximations.md).
+  <https://arxiv.org/abs/1503.05671>
+- **Botev, Ritter, Barber (2017)** — *Practical Gauss-Newton Optimisation for Deep
+  Learning*, ICML. The GGN and its Kronecker factorisation.
+  <https://arxiv.org/abs/1706.03662>
+- **Kunstner, Balles, Hennig (2019)** — *Limitations of the Empirical Fisher
+  Approximation*, NeurIPS. Why the observed-label gradient second moment is not a
+  curvature matrix — [M7](methods/curvature-approximations.md).
+  <https://arxiv.org/abs/1905.12558>
+- **Dangel, Kunstner, Hennig (2020)** — *BackPACK: Packing more into Backprop*, ICLR.
+  The library behind the paper's `KFAC` curvature.
+  <https://arxiv.org/abs/1912.10985>
+- **Immer, Korzepa, Bauer (2021)** — *Improving predictions of Bayesian neural nets
+  via local linearization*, AISTATS. A GGN posterior wants the *linearised*
+  predictive — [decision 0012](decisions/0012-ggn-laplace-for-deep-arms.md).
+  <https://arxiv.org/abs/2008.08400>
 - **Daxberger et al. (2021)** — *Laplace Redux — Effortless Bayesian Deep Learning*,
   NeurIPS. The `laplace-torch` paper; survey of Laplace variants — [Q6](open-questions.md#q6).
   <https://arxiv.org/abs/2106.14806>

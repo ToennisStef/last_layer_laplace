@@ -4,10 +4,20 @@
 
 ## Context
 Turning a Gaussian over logits into a class probability requires
-`E[sigmoid(f)]`, which has no closed form.
+
+$$p(y = 1 \mid x) = \mathbb{E}_{f \sim \mathcal{N}(m(x),\, v(x))}\big[\sigma(f)\big]$$
+
+which has no closed form. Here $f$ is the logit, $m(x)$ and $v(x)$ its posterior mean
+and variance at input $x$, and $\sigma(z) = 1/(1+e^{-z})$ the sigmoid.
 
 ## Decision
 Use MacKay's probit approximation, as the paper's code does:
+
+$$\mathbb{E}\big[\sigma(f)\big] \;\approx\;
+\sigma\!\left(\frac{m(x)}{\sqrt{1 + \tfrac{\pi}{8} v(x)}}\right),
+\qquad v(x) = \phi(x)^\top \Sigma\, \phi(x)$$
+
+with $\phi(x)$ the frozen feature vector and $\Sigma$ the posterior covariance:
 
 ```python
 v = torch.diag(phi @ sigma @ phi.T)

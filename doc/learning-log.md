@@ -106,6 +106,81 @@ baseline kept in `artifacts_run1_4chains/`.
   outside the repo. The retraction is transferable too — *seeding MCMC at the MAP
   can manufacture the appearance of a narrow posterior*.
 
+## 2026-08-24 — the prior-scale sweep answers Q8, and Laplace runs out of road
+
+Two new scripts, both importing `two_moons_comparison` rather than forking it:
+`prior_scale_sweep.py` (one full four-way comparison per `var0`) and
+`full_bnn_ablation.py` (a `ll -> last2 -> full` ladder over how much of the network
+is Bayesian). Each writes one timestamped folder per invocation
+([0011](decisions/0011-sweep-layout.md)).
+
+- **[Q8](open-questions.md#q8) confirmed, quantitatively.** Across 8 prior scales the
+  Laplace-vs-NUTS predictive disagreement falls monotonically 0.2542 -> 0.0030 as `s`
+  goes 100 -> 0.1, and at the tight end the two mean confidences agree to three
+  decimals. [M6](methods/mode-vs-typical-set.md) made a prediction that could have
+  failed and it did not. Numbers in
+  [prior-scale-calibration](methods/prior-scale-calibration.md#measured-sweep).
+- **A prediction of mine was falsified by the last run, and that is the useful part.**
+  I claimed the top of the sweep would saturate because the pinned weight decay caps
+  the effective prior variance at `1/lambda = 2000`. The `s = 100` run instead grew
+  the gap (0.2300 -> 0.2542) and nearly doubled the widths. The cap is real but acts
+  on the **MAP location only** (`||w_map||` plateaus 14.29 -> 17.30), because
+  `weight_decay` appears in stage 1 alone; the Laplace Hessian, the VI objective and
+  the NUTS target use the model prior, so width grows `~ s` (NUTS sd/s constant at
+  0.776). Corrected in [M1](methods/prior-scale-calibration.md#measured-sweep) and
+  [I10](gotchas/prior-enters-map-fit.md).
+- That correction *improves* the story: Laplace's centre is pinned while its width
+  grows, so its ratio -> 0 and confidence -> 0.5, whereas NUTS scales centre and
+  width together and its confidence freezes at 0.845 from `s = 10` up. Straight
+  application of the ratio argument in [M2](methods/laplace-vs-vi-vs-mcmc.md).
+- Free bonus: the sweep re-tests M6's shell radius at four scales. Median
+  `||w||/s` = 4.52, 4.41, 4.42, 4.38 against the predicted `sqrt(d-1) = 4.36`.
+- The `s = 100` run has `r_hat = 1.0122`, the only one above 1.01 — flagged in M1 as
+  the weakest row. Its typical set sits at radius ~447, which is what makes it hard.
+- Two caveats found by instrumenting the sweep rather than trusting it: the prior
+  reaches the MAP through the **stage-1 ELBO**, so every prior scale trains a
+  different feature map even at fixed weight decay (train accuracy 0.865 -> 1.000
+  across the sweep), and the pinned weight decay **caps** the effective `var0` at
+  2000, making the top two rows near-duplicates —
+  [I10](gotchas/prior-enters-map-fit.md).
+- The loosest scale (`s = 100`) is not just slow but *qualitatively* slow: NUTS at
+  ~5-15 s/iteration against ~25 min for an entire run at moderate `s`. The typical
+  set at radius `s*sqrt(d) ~ 447` needs long trajectories — M6's geometry showing up
+  as compute cost.
+- **Exact-Hessian Laplace does not survive past the last layer.** Measured at one MAP
+  point: 0 negative eigenvalues over the 20 last-layer weights, **79 of 500** over
+  all Linear weights. With frozen features the last-layer problem is logistic
+  regression — convex — and its smallest eigenvalue (6.4e-4) is barely above the
+  prior precision (5.0e-4), so *the prior is what keeps LLLA invertible*.
+  [I11](gotchas/full-bnn-laplace-not-pd.md).
+- The two code paths disagree about this and the loud one is right: pyro's Cholesky
+  refuses, while the notebook's `torch.inverse` "succeeds" and returns a covariance
+  with 60 negative variances.
+- Read `paper/` to see what the authors did instead: **never** an exact full-network
+  Hessian. Their deep variants use a diagonal MC Fisher, a Kronecker-factored MC
+  Fisher, or a dense GGN — with `exact_hessian(...)` commented out beside a
+  commented-out eigenvalue check in `notebooks/laplace/diag_laplace.py`. They hit
+  this and moved on. Taxonomy written up as
+  [M7](methods/curvature-approximations.md).
+- So the ablation carries a **GGN Laplace** ([0012](decisions/0012-ggn-laplace-for-deep-arms.md)),
+  reported with both predictives — sampled (comparable to every other method) and
+  linearised (self-consistent with the GGN, and what the paper does). Validated on
+  the `ll` arm, where all three must coincide and do: GGN vs exact Hessian agree to
+  1.2e-10 in eigenvalues, and the three Laplace rows give 0.675 / 0.676 / 0.676 mean
+  confidence at 4000 draws.
+- Correction while re-reading: `dla.py` samples its labels *from the model*, so it is
+  an **MC Fisher**, not the empirical Fisher an earlier draft of
+  [I11](gotchas/full-bnn-laplace-not-pd.md) called it. The distinction is the whole
+  point of Kunstner et al. (2019).
+- Also noted: MC noise on grid-mean confidence is larger than it looks, because
+  `Predictive` reuses the *same* weight draws at every grid point — the error scales
+  as `1/sqrt(S)`, not `1/sqrt(S*n_grid)`. Two runs of the same posterior differed by
+  0.016 in mean confidence at `S = 100` and by 0.001 at `S = 4000`.
+- **Transferable?** yes, most of it. That a Laplace approximation is well posed for a
+  last layer and ill posed for a full network is a statement about model classes, as
+  is the GGN/Fisher/empirical-Fisher taxonomy. The MC-noise point applies to any
+  sampled predictive on a grid.
+
 ## Open at end of 2026-08-20
 The comparison is not yet trustworthy enough to conclude anything about LLLA:
 same-estimator scoring ([Q4](open-questions.md#q4)), MCMC convergence audit

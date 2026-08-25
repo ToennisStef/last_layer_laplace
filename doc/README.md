@@ -7,6 +7,7 @@ Entry points:
 
 | File | Contains |
 |---|---|
+| [setup/](setup/) | **What the experiment is** — architectures, arm definitions, parameter counts. Descriptive, not a finding. |
 | [decisions/](decisions/) | **Why** a choice was made, one numbered record each. Append-only. |
 | [lessons-implementation.md](lessons-implementation.md) | Coding / library gotchas (Pyro, PyTorch). One line each → detail file. |
 | [lessons-methodology.md](lessons-methodology.md) | What the *methods* actually do — calibration, approximation quality. |
@@ -20,6 +21,13 @@ carries the routing table for emptying it.
 Conventions:
 
 - Detail files live in [gotchas/](gotchas/) and [methods/](methods/).
+- **Finding or apparatus?** That is the test for where a file goes. A *finding*
+  (something the runs taught us) belongs in `methods/` or `gotchas/` with a `Source:`
+  line. A description of the *apparatus* — what the architecture is, what an arm
+  means, how many parameters each configuration has — belongs in [setup/](setup/),
+  carries a `Describes:` line naming the script it documents, and needs no `Source:`
+  because it is not a claim about the world. If it would go stale when the *code*
+  changes rather than when a *belief* changes, it is setup.
 - Every lesson records **how it was learned** (`Source:` line): *measured*, *read*,
   *inferred*, or *assumed* — so unverified beliefs stay visibly unverified.
 - Keep entries short. If it needs more than ~40 lines, it is a method note, not a gotcha.

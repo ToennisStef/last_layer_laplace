@@ -8,7 +8,14 @@ and it must be *some* number before anything can be compared. Weight decay
 `λ = 5e-4` was inherited from the paper's training setup.
 
 ## Decision
-Derive the prior from the weight decay rather than picking it independently:
+Derive the prior from the weight decay rather than picking it independently. Weight
+decay $\lambda$ *is* a prior precision, so
+
+$$\mathrm{var}_0 = \frac{1}{\lambda} = 2000,
+\qquad s = \sqrt{\mathrm{var}_0} \approx 44.7$$
+
+with $\lambda = 5\times10^{-4}$ the weight decay, $\mathrm{var}_0$ the prior variance
+and $s$ the standard deviation that `dist.Normal` takes ([I1](../gotchas/prior-scale-units.md)):
 
 ```python
 var0 = 1 / 5e-4   # = 2000

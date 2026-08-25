@@ -9,7 +9,12 @@ Pyro autoguides default to `init_to_median` / `init_to_feasible`. With a symmetr
 
 ## Decision
 Pass an explicit fan-in draw to every guide, so Laplace and MVN-VI start from the
-same distribution of initial points:
+same distribution of initial points. The fan-in rule is what `nn.Linear` itself uses,
+
+$$w_i \sim \mathcal{U}\!\left(-\frac{1}{\sqrt{\mathrm{fan\_in}}},\;
++\frac{1}{\sqrt{\mathrm{fan\_in}}}\right)$$
+
+where $\mathrm{fan\_in}$ is the layer's input width ($h$ for the last layer):
 
 ```python
 init_to_value(values={"w": (torch.rand(h) * 2 - 1) * h**-0.5})

@@ -740,17 +740,26 @@ def run_arm(cfg: Config, spec: ArmSpec, arm_dir: Path, *, args) -> str:
         f"over {bnn.latent_dim} dims, init = {args.mcmc_init}"
     )
     kernel = NUTS(bnn.model, init_strategy=mcmc_init_strategy(bnn, args.mcmc_init, lap_guide))
+    # mp_context="spawn" is load-bearing, not a preference. With num_chains > 1 pyro
+    # takes the platform default start method, which on Linux is `fork`; forking after
+    # stages 1-2 have warmed torch's OpenMP pool deadlocks every worker on an inherited
+    # libgomp futex - one thread, zero CPU, no exception to catch, so the run hangs
+    # instead of failing. See doc/gotchas/fork-deadlock-multichain-nuts.md.
     mcmc = MCMC(
         kernel,
         num_samples=cfg.mcmc_samples,
         warmup_steps=cfg.mcmc_warmup,
         num_chains=cfg.mcmc_chains,
+        mp_context="spawn",
     )
     try:
         mcmc.run(x_train, y_train)
     except RuntimeError as exc:
-        # Same Windows multiprocessing trap as two_moons_comparison: num_chains > 1
-        # spawns processes and needs the caller behind `if __name__ == "__main__"`.
+        # The multiprocessing trap two_moons_comparison hit on Windows, now reachable
+        # on every platform because the sampler above asks for spawn explicitly: spawn
+        # re-imports the entry module, so the caller must sit behind
+        # `if __name__ == "__main__"`. This arm falls back to one chain, which needs no
+        # subprocess at all - so `mp_context` is deliberately absent below.
         if "bootstrapping phase" not in str(exc):
             raise
         total = cfg.mcmc_samples * cfg.mcmc_chains

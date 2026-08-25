@@ -17,6 +17,7 @@ Library-level traps hit while porting last-layer Laplace (LLLA) to Pyro.
 | I9 | `param_store.load()` raises under torch>=2.6 **and** silently leaves `AutoMultivariateNormal.loc` unrestored — save posterior draws instead of guide machinery | measured | [param-store-reload](gotchas/param-store-reload.md) |
 | I10 | The prior is part of the **stage-1 objective** (`AutoLaplaceApproximation` acts as `AutoDelta`, so the ELBO is `-log p(w, D)`), so sweeping `var0` retrains the feature map — and an optimiser-level `weight_decay` on `w` is a *second* copy of that same prior | measured | [prior-enters-map-fit](gotchas/prior-enters-map-fit.md) |
 | I11 | Exact-Hessian Laplace is well posed only for the **last layer** (frozen features make it logistic regression, hence convex). Over all weights the Hessian had 79 negative eigenvalues of 500 - pyro refuses, `torch.inverse` silently returns negative variances | measured | [full-bnn-laplace-not-pd](gotchas/full-bnn-laplace-not-pd.md) |
+| I12 | Multi-chain `MCMC` **forks** by default on Linux; a fork after stage 1/2 warm torch's OpenMP pool deadlocks every worker on an inherited libgomp futex - zero CPU, no exception, hangs forever. Pass `mp_context="spawn"` | measured | [fork-deadlock-multichain-nuts](gotchas/fork-deadlock-multichain-nuts.md) |
 
 Related: methodological consequences of I1 are in
 [lessons-methodology.md](lessons-methodology.md) (M1).

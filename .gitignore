@@ -132,3 +132,14 @@ dmypy.json
 
 # Literature PDFs — copied from the UQHM vault (06_Literature), not redistributable
 literature/
+
+# Sweep runs: keep the tables, figures and logs, drop the large tensors
+sweeps/**/*.pt
+# but keep the per-run sweep logs, they are the record of each run
+!sweeps/**/run.log
+
+# Ablation arms: same policy as sweeps
+ablations/**/*.pt
+!ablations/**/run.log
+
+.svg

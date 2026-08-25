@@ -14,6 +14,7 @@ Entry points:
 | [open-questions.md](open-questions.md) | Ideas and TODOs **not yet tried**. Nothing here is verified. |
 | [learning-log.md](learning-log.md) | The lab log — chronological: what was run, what it showed, which lesson came out. |
 | [references.md](references.md) | Papers, code, API docs. |
+| [promotions.md](promotions.md) | Ledger of `Transferable? yes` items promoted into the central vault (`02_Notes`). |
 
 Capture happens in [../NOTES.md](../NOTES.md) (scratch, gets emptied); that file
 carries the routing table for emptying it.

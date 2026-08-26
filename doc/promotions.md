@@ -26,6 +26,10 @@ Promotion pass (2026-08-25):
 | I9 | gotchas/param-store-reload.md | (Pyro) param-store reload breaks under torch 2.6 | — |
 | Q5 | learning-log.md (2026-08-21 retraction) | MAP-seeding can manufacture a narrow posterior | Betancourt2017, Hoffman2011 |
 | — | learning-log.md (2026-08-24) | MC predictive noise on a grid scales as 1 over sqrt(S) | — |
+| I12 | gotchas/fork-deadlock-multichain-nuts.md | Never fork after a threaded OpenMP/BLAS runtime | — |
+| I13 | gotchas/thread-cap-placement-spawn.md | Config in the `__main__` guard never reaches spawned children | — |
+| I14 | gotchas/log-streams-and-buffering.md | tqdm writes to stderr; `-u` does not cover a wrapper's file handle | — |
+| — | learning-log.md (2026-08-26) | Detaching a long job from an SSH/VSCode session (cgroups, not `nohup`) | — |
 
 Standing rule for the next promotion pass: for each `Transferable? yes` line, (1)
 ensure a `[[citekey]]` stub exists in `06_Literature/notes/`; (2) write/extend the

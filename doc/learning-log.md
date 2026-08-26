@@ -186,3 +186,41 @@ The comparison is not yet trustworthy enough to conclude anything about LLLA:
 same-estimator scoring ([Q4](open-questions.md#q4)), MCMC convergence audit
 ([Q5](open-questions.md#q5)) and real calibration metrics ([Q3](open-questions.md#q3))
 all still missing.
+
+## 2026-08-26 — threading, process lifetime, and what a log actually records
+
+Three days of "the ablation is still running" turned out to be one hang and one
+silent death. Both are now documented; the operational half is the part that
+survives this repo.
+
+- The two aborted runs of 2026-08-25 were the [I12](gotchas/fork-deadlock-multichain-nuts.md)
+  fork deadlock. `mp_context="spawn"` was committed *after* the last of them, so the
+  fix had never actually been exercised. It works: a `--quick ll` arm at 10 chains
+  now runs clean through stage 3, exit 0.
+- Capping threads is not optional once chains are cheap. `torch.set_num_threads(1)`
+  written in `main()` leaves every spawned worker at 16 threads —
+  [I13](gotchas/thread-cap-placement-spawn.md), with the measured placement table.
+  At this network's shape one thread is ~2800x faster than sixteen for a 200x20
+  matmul, so the cap buys speed *and* makes 10 chains cost what 5 did.
+- The MCMC progress bars were never in `run.log` at all (tqdm → stderr, `Tee` wraps
+  stdout) — [I14](gotchas/log-streams-and-buffering.md). Same note records that
+  `Tee.flush()` is dead code, so `run.log` is block-buffered and an abort can eat
+  its tail. `disable_progbar=True` is now set.
+- **The `full` arm died because nothing detached it.** Not a bug, an ops gap: the run
+  lived in the SSH session's cgroup, so it went with the VSCode window. Measured on
+  this VDI: `KillUserProcesses` is `no` (so logind is not the killer) and the session
+  is `Service=sshd`, `Scope=session-2248.scope`. `nohup` only ignores `SIGHUP`; it
+  neither backgrounds nor detaches. What actually survives:
+
+  ```
+  systemd-run --user --unit=bnn-ablation --collect \
+    --working-directory=<repo> <repo>/.venv/bin/python -u full_bnn_ablation.py ...
+  ```
+
+  which lands the job in `user@.service/app.slice`, a different cgroup branch from the
+  session. `loginctl enable-linger` was turned on so it also survives a full VDI
+  logout. `setsid nohup ... &` is the cheap version; `tmux`/`screen` are not installed.
+- **Transferable?** yes, most of it. I13's rule ("runtime config set inside the
+  `__main__` guard never reaches spawned children; environment variables do") and
+  I14's two stream facts are library properties. The detach recipe is pure ops and
+  belongs in the AI-OS notes, not here — see [promotions](promotions.md).

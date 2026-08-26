@@ -1,4 +1,50 @@
-"""Ablation over *how much* of the network is Bayesian: last layer -> full BNN.
+"""Bayesian-depth ablation with the prior scale *tuned per arm*, not fixed.
+
+A copy of `full_bnn_ablation.py` (which is unchanged and remains the fixed-prior
+reference) plus one new stage: before stage 1, `var0` is chosen by maximising the
+Laplace log marginal likelihood with `laplace-torch`, per arm.
+
+Why: `var0 = 2000` comes from the weight-decay correspondence (decision 0003),
+calibrated when the only Bayesian layer was the 21-dimensional output. At 441 and 501
+dimensions the same prior saturates the likelihood - every posterior draw predicts
+p in {0, 1}, aleatoric uncertainty measures 0.0000 - and NUTS cannot explore the
+resulting geometry: n_eff ~3 of 2500 draws, r_hat to 20.4, 1424 divergent draws on
+`full`. Tuning is the first thing to try before spending compute on longer chains.
+
+How the tuning works, and its two honest limits:
+
+**The model laplace-torch sees.** `TorchArmNet` re-expresses the pyro model as a plain
+`nn.Module` whose only trainable parameters are the arm's Bayesian layers - the
+deterministic prefix and BatchNorm are copied from the frozen fit and switched off
+with `requires_grad_(False)`, which is how laplace-torch selects a subset. Its output
+is `(N, 2)` = `[0, f]`, because laplace-torch's 'classification' likelihood is a
+softmax cross-entropy and `softmax([0, f])_1 = sigmoid(f)`, making loss, gradient and
+output curvature identical to the Bernoulli model. `run_arm` verifies the mirror
+numerically: at equal prior precision, laplace-torch's GGN and our own must agree
+(measured: 2.2e-07 on `ll`, 1.7e-06 on `last2`, both limited by curvlinops casting
+to float32).
+
+**Limit 1 - the prior enters the MAP.** `optimize_prior_precision` maximises log Z at
+a *fixed* MAP, but that MAP was fitted under the previous prior
+(doc/gotchas/prior-enters-map-fit.md). Iterating the two looked like the fix and is
+not: measured on `last2`, log Z is best at iteration 1 and falls monotonically
+(-32.0 -> -61.8) while var0 slides 2.07 -> 0.071, because a tighter prior shrinks the
+MAP which then asks for a tighter prior. So the default is a single pass, and the
+returned value is always the **best log Z** across iterations, never the last one.
+`--tune-iters 6` exposes the drift.
+
+**Limit 2 - it is Laplace's answer.** log Z here is the Laplace approximation to the
+evidence, computed from a GGN at one mode. On an arm where the exact-Hessian Laplace
+is not even positive definite (`last2`, `full` - I11) that is a real approximation,
+not a technicality. Treat the tuned var0 as a well-motivated starting point that the
+NUTS diagnostics then have to confirm, not as the true optimum.
+
+Everything below this point is `full_bnn_ablation.py`, unchanged except where the
+tuning hooks in. Original docstring follows.
+
+---
+
+Ablation over *how much* of the network is Bayesian: last layer -> full BNN.
 
 Answers Q2 (doc/open-questions.md): is the Laplace-vs-NUTS gap a property of the
 Laplace approximation, or of the last-layer restriction? One architecture is fitted
@@ -46,12 +92,18 @@ this script's `ll` arm is not byte-identical to `two_moons_comparison` (its outp
 layer carries a bias, giving 21 latent dimensions against 20). Re-running it gives
 the within-architecture baseline the ladder needs.
 
-**Weight-space `r_hat` is not interpretable for the deeper arms.** Hidden-unit
-permutations and ReLU sign flips make the posterior massively multimodal in weight
-space, and equivalent chains can sit in different modes. `mcmc_diagnostics.json` is
-still written, but read it as "did the chains mix over *this* parametrisation",
-which for `full` they will not. Function-space diagnostics are the right tool and
-are deliberately **not** implemented here - no metric is added by this script.
+**Weight-space `r_hat` IS interpretable here - the original claim was wrong.**
+`full_bnn_ablation.py` says permutations and "ReLU sign flips" make weight-space
+`r_hat` meaningless for the deeper arms. Measured on the `last2` arm, that is false
+*for this architecture*: permuting `w1` rows / `b1` / `w2` columns changes the logits
+by up to 6.5e4, and only permuting the frozen BatchNorm buffers along with them
+restores invariance (8.7e-11). Those buffers are fixed per-channel constants the
+sampler cannot touch, so **freezing BN breaks the permutation symmetry** - and ReLU
+has no sign symmetry at all (`relu(-z) != -relu(z)`; that is a tanh property, its
+own symmetry being positive rescaling, which the frozen affine also breaks).
+The general principle is sound; it simply does not apply once BN is frozen. So
+`r_hat` and `n_eff` in `mcmc_diagnostics.json` are real convergence diagnostics for
+every arm, and on the deeper arms they are reporting a real failure.
 
 Cost warning: `full` has ~500 latent dimensions against 20 for `ll`. NUTS and the
 full-rank guide both scale badly in that number. Use `--arms`, `--quick` and
@@ -111,6 +163,9 @@ from pyro.infer.autoguide import (
 )
 from pyro.optim import ClippedAdam, SGD
 from torch import Tensor
+from torch.utils.data import DataLoader, TensorDataset
+
+from laplace import Laplace
 
 from pyro import poutine
 
@@ -374,6 +429,193 @@ class PartiallyBayesianMLP(pyro.nn.PyroModule):
         return state
 
 
+# --- prior-scale tuning via laplace-torch ------------------------------------
+
+
+class TorchArmNet(nn.Module):
+    """Plain-torch mirror of `PartiallyBayesianMLP.model`, for `laplace-torch`.
+
+    `laplace-torch` needs an `nn.Module` whose `parameters()` *are* the weights to
+    treat Bayesianly. The pyro model keeps those as `pyro.sample` sites and holds no
+    parameters for them at all, so this class re-expresses the same computation with
+    the Bayesian layers as real `nn.Linear`s, while the deterministic prefix and the
+    BatchNorm buffers are copied from the frozen pyro fit and switched off with
+    `requires_grad_(False)`. That is exactly how `laplace-torch` selects a subset -
+    "Only do Laplace on params that require grad" (`BaseLaplace.__init__`) - so the
+    tuned prior applies to precisely the arm's latent sites and nothing else.
+
+    **Why the output is `(N, 2)` and not the scalar logit.** `laplace-torch`'s
+    `'classification'` likelihood is a softmax cross-entropy, and this model is
+    Bernoulli on one logit. Emitting `[0, f]` reconciles them exactly:
+    `softmax([0, f])_1 = sigmoid(f)`, so the loss, its output gradient `p - y` and
+    its output curvature `p(1-p)` all agree with the Bernoulli model. The zero
+    column carries no parameters, so its Jacobian row is zero and the GGN is
+    unchanged. `run_arm` verifies this numerically on the `ll` arm, where the GGN
+    must reproduce the exact Hessian.
+
+    The BatchNorm path is written out functionally, matching
+    `PartiallyBayesianMLP.apply_norm` after freezing - `eval()` mode BN *is* an
+    affine map, and hand-writing it keeps the two forward passes identical.
+    """
+
+    def __init__(
+        self, bnn: PartiallyBayesianMLP, map_values: dict[str, Tensor]
+    ) -> None:
+        """Mirror *bnn*, with the Bayesian layers initialised at *map_values*."""
+        super().__init__()
+        self.dims = list(bnn.dims)
+        self.n_layers = bnn.n_layers
+        self.first_bayes = bnn.first_bayes
+
+        self.det_layers = nn.ModuleList(
+            [nn.Linear(i, o) for (i, o) in self.dims[: self.first_bayes]]
+        )
+        if self.first_bayes:
+            self.det_layers.load_state_dict(bnn.det_layers.state_dict())
+
+        if bnn.norms is not None:
+            self.norms = nn.ModuleList([nn.BatchNorm1d(o) for (_, o) in self.dims[:-1]])
+            self.norms.load_state_dict(bnn.norms.state_dict())
+        else:
+            self.norms = None
+
+        # The only trainable parameters: one nn.Linear per Bayesian layer, at the MAP.
+        self.bayes_layers = nn.ModuleList(
+            [nn.Linear(i, o) for (i, o) in self.dims[self.first_bayes :]]
+        )
+        with torch.no_grad():
+            for k, i in enumerate(range(self.first_bayes, self.n_layers)):
+                self.bayes_layers[k].weight.copy_(map_values[f"w{i}"])
+                self.bayes_layers[k].bias.copy_(map_values[f"b{i}"])
+
+        for p in self.det_layers.parameters():
+            p.requires_grad_(requires_grad=False)
+        self.det_layers.eval()
+        if self.norms is not None:
+            for p in self.norms.parameters():
+                p.requires_grad_(requires_grad=False)
+            self.norms.eval()
+
+    def apply_norm(self, i: int, h_: Tensor) -> Tensor:
+        """Frozen BatchNorm as an affine map, matching the pyro model's frozen path."""
+        if self.norms is None:
+            return h_
+        bn = self.norms[i]
+        scale = bn.weight / torch.sqrt(bn.running_var + bn.eps)
+        return (h_ - bn.running_mean) * scale + bn.bias
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Two-column logits ``[0, f]``; see the class docstring for why."""
+        h_ = x
+        for i in range(self.first_bayes):
+            h_ = torch.relu(self.apply_norm(i, self.det_layers[i](h_)))
+        for k, i in enumerate(range(self.first_bayes, self.n_layers)):
+            h_ = self.bayes_layers[k](h_)
+            if i < self.n_layers - 1:
+                h_ = torch.relu(self.apply_norm(i, h_))
+        f = h_.squeeze(-1)
+        return torch.stack([torch.zeros_like(f), f], dim=-1)
+
+    def bayes_parameter_count(self) -> int:
+        """Trainable parameters - must equal the arm's `latent_dim`."""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+def fit_laplace_torch(
+    net: TorchArmNet,
+    x_train: Tensor,
+    y_train: Tensor,
+    *,
+    hessian_structure: str,
+    var0: float,
+) -> Laplace:
+    """Fit a `laplace-torch` posterior at the current parameters of *net*.
+
+    Full batch: the GGN is a sum over data points either way, and n_train here is
+    200. `y` is cast to `long` because the `'classification'` likelihood is a
+    softmax cross-entropy over the two columns `TorchArmNet` emits.
+    """
+    loader = DataLoader(
+        TensorDataset(x_train, y_train.long()), batch_size=x_train.shape[0]
+    )
+    la = Laplace(
+        net,
+        "classification",
+        subset_of_weights="all",
+        hessian_structure=hessian_structure,
+        prior_precision=1.0 / var0,
+    )
+    la.fit(loader)
+    return la
+
+
+def tune_var0_once(
+    bnn: PartiallyBayesianMLP,
+    map_values: dict[str, Tensor],
+    x_train: Tensor,
+    y_train: Tensor,
+    *,
+    hessian_structure: str,
+    n_steps: int,
+    lr: float,
+    init_var0: float,
+) -> tuple[float, float, Laplace]:
+    """Maximise the Laplace log marginal likelihood over the prior precision.
+
+    Returns ``(var0, log_marglik, la)``. `prior_structure="scalar"` keeps a single
+    shared precision, which is what `Config.var0` is - the `"diag"` default would
+    return one value per coordinate and there would be no scalar to feed back.
+
+    The optimisation is gradient ascent on `log Z(tau)` at a *fixed* MAP, so it is
+    only half the story: the prior also enters the stage-1 objective
+    (doc/gotchas/prior-enters-map-fit.md), which is why `tune_var0` iterates.
+    """
+    net = TorchArmNet(bnn, map_values)
+    n_trainable = net.bayes_parameter_count()
+    if n_trainable != bnn.latent_dim:
+        msg = (
+            f"torch mirror exposes {n_trainable} trainable parameters, "
+            f"but the arm has latent_dim {bnn.latent_dim}"
+        )
+        raise ValueError(msg)
+
+    la = fit_laplace_torch(
+        net, x_train, y_train, hessian_structure=hessian_structure, var0=init_var0
+    )
+    la.optimize_prior_precision(
+        "glm",
+        method="marglik",
+        prior_structure="scalar",
+        init_prior_prec=1.0 / init_var0,
+        n_steps=n_steps,
+        lr=lr,
+    )
+    prec = float(torch.as_tensor(la.prior_precision).mean())
+    return 1.0 / prec, float(la.log_marginal_likelihood()), la
+
+
+def check_ggn_against_laplace_torch(
+    la: Laplace, ggn_lap: GGNLaplace, var0: float
+) -> str:
+    """Compare `laplace-torch`'s posterior precision with ours, via eigenvalues.
+
+    Only meaningful for a `full` Hessian structure. Eigenvalues rather than entries
+    because the two sides flatten the latent in their own order; this is the same
+    check `run_arm` already makes between our GGN and the exact Hessian, and it is
+    what establishes that `TorchArmNet` really is the pyro model.
+    """
+    theirs = torch.as_tensor(la.posterior_precision).double()
+    if theirs.dim() != 2:
+        return "skipped (not a full Hessian)"
+    ours = ggn_lap.precision.double()
+    if theirs.shape != ours.shape:
+        return f"shape mismatch: theirs {tuple(theirs.shape)}, ours {tuple(ours.shape)}"
+    e_t = torch.linalg.eigvalsh(0.5 * (theirs + theirs.T))
+    e_o = torch.linalg.eigvalsh(0.5 * (ours + ours.T))
+    rel = float(((e_t - e_o).abs() / e_o.abs().clamp_min(1e-12)).max())
+    return f"max relative eigenvalue diff {rel:.3e}"
+
+
 # --- one arm -----------------------------------------------------------------
 
 
@@ -600,34 +842,42 @@ def posterior_spread(samples: dict[str, Tensor]) -> float:
     return float(torch.cat(flat).mean())
 
 
-def run_arm(cfg: Config, spec: ArmSpec, arm_dir: Path, *, args) -> str:
-    """Fit one arm: MAP, Laplace, two VI guides, NUTS; save artifacts and figures."""
-    torch.set_default_dtype(torch.float64)
+def fit_map_stage(
+    cfg: Config,
+    spec: ArmSpec,
+    args,
+    x_train: Tensor,
+    y_train: Tensor,
+    n: int,
+    rng_state: Tensor,
+    *,
+    quiet: bool = False,
+) -> tuple[PartiallyBayesianMLP, AutoLaplaceApproximation, list[float]]:
+    """Stage 1 in one call: fresh model, MAP at `cfg.var0`, prefix frozen.
+
+    Extracted from `run_arm` so the tuner can re-run it. `rng_state` is restored
+    rather than re-seeded: `run_arm` snapshots it *after* generating the data, so the
+    first call here draws exactly the guide init the untuned script would have drawn,
+    and every later call repeats it - leaving `var0` as the only thing that varies.
+    """
     pyro.clear_param_store()
-    set_seed(cfg.seed)
-
-    figure_dir = Path(cfg.figure_dir)
-    figure_dir.mkdir(parents=True, exist_ok=True)
-
-    x_train, y_train = two_moons(cfg.n_train, sigma=cfg.noise)
-    x1_grid, x2_grid, x_test = make_grid(cfg)
-    _, n = x_train.shape
-
+    torch.set_rng_state(rng_state)
     bnn = PartiallyBayesianMLP(
         n=n, h=cfg.h, k=cfg.k, bayes_depth=spec.bayes_depth, norm=args.norm
     )
     bnn.prior_scale = cfg.prior_scale
-    print(
-        f"arm {spec.name!r}: {spec.description}\n"
-        f"  bayes_depth = {spec.bayes_depth}/{bnn.n_layers}, "
-        f"latent dim = {bnn.latent_dim}, sites = {bnn.bayes_sites}\n"
-        f"  prior_scale = {cfg.prior_scale:.3f} (var0 = {cfg.var0:.1f}), norm = {args.norm}"
-    )
-
-    # --- stage 1: MAP of the latent sites + the deterministic prefix ---------
+    if not quiet:
+        print(
+            f"arm {spec.name!r}: {spec.description}\n"
+            f"  bayes_depth = {spec.bayes_depth}/{bnn.n_layers}, "
+            f"latent dim = {bnn.latent_dim}, sites = {bnn.bayes_sites}\n"
+            f"  prior_scale = {cfg.prior_scale:.3f} (var0 = {cfg.var0:.4g}), "
+            f"norm = {args.norm}"
+        )
     # AutoLaplaceApproximation acts as AutoDelta here, so the ELBO is -log p(w, D).
-    # NOTE: this objective contains the prior, so the prefix that gets frozen below
-    # depends on the prior scale - see doc/gotchas/prior-enters-map-fit.md.
+    # NOTE: this objective contains the prior, so the prefix frozen below depends on
+    # the prior scale - see doc/gotchas/prior-enters-map-fit.md. That dependence is
+    # exactly why `tune_var0` iterates instead of tuning once.
     lap_guide = AutoLaplaceApproximation(bnn.model, init_loc_fn=init_loc_fn_for(bnn))
     pyro.module("_lap_guide", lap_guide)  # fixes the param names map_point() reads
     if bnn.norms is not None:
@@ -644,11 +894,131 @@ def run_arm(cfg: Config, spec: ArmSpec, arm_dir: Path, *, args) -> str:
         ),
         loss=Trace_ELBO(),
     )
-    print(f"stage 1: MAP, {cfg.map_steps} steps")
+    if not quiet:
+        print(f"stage 1: MAP, {cfg.map_steps} steps")
     map_losses = [svi_map.step(x_train, y_train) for _ in range(cfg.map_steps)]
-    print(f"  -log p(w, D) = {map_losses[-1]:.3f}")
-
+    if not quiet:
+        print(f"  -log p(w, D) = {map_losses[-1]:.3f}")
     bnn.freeze_deterministic()
+    return bnn, lap_guide, map_losses
+
+
+def tune_var0(
+    cfg: Config,
+    spec: ArmSpec,
+    args,
+    x_train: Tensor,
+    y_train: Tensor,
+    n: int,
+    rng_state: Tensor,
+) -> tuple[Config, list[dict]]:
+    """Iterate MAP <-> marginal-likelihood tuning until `var0` stops moving.
+
+    `optimize_prior_precision` maximises `log Z(tau)` at a **fixed** MAP, but that
+    MAP was fitted under the *previous* prior, so a single pass is only half a
+    fixed-point step. Iterating is the cheap honest version; `--tune-iters 1`
+    reproduces the naive one-shot answer for comparison.
+
+    Convergence is measured on `|d log var0|` because var0 spans orders of magnitude
+    - an absolute tolerance would be meaningless at 2000 and unreachable at 0.01.
+    """
+    history: list[dict] = []
+    var0 = cfg.var0
+    print(
+        f"prior tuning: laplace-torch marglik ({args.tune_hessian} Hessian), "
+        f"<= {args.tune_iters} MAP<->tune iterations, start var0 = {var0:.4g}"
+    )
+    converged = False
+    for it in range(1, args.tune_iters + 1):
+        cfg_it = replace(cfg, var0=var0)
+        bnn, lap_guide, _ = fit_map_stage(
+            cfg_it, spec, args, x_train, y_train, n, rng_state, quiet=True
+        )
+        new_var0, logz, _ = tune_var0_once(
+            bnn,
+            map_point(lap_guide),
+            x_train,
+            y_train,
+            hessian_structure=args.tune_hessian,
+            n_steps=args.tune_steps,
+            lr=args.tune_lr,
+            init_var0=var0,
+        )
+        moved = abs(math.log(new_var0) - math.log(var0))
+        history.append(
+            {
+                "iter": it,
+                "var0_in": var0,
+                "var0_out": new_var0,
+                "log_marglik": logz,
+                "abs_dlog_var0": moved,
+            }
+        )
+        print(
+            f"  iter {it}: var0 {var0:.4g} -> {new_var0:.4g}  "
+            f"(prior_scale {math.sqrt(var0):.3f} -> {math.sqrt(new_var0):.3f}), "
+            f"log Z = {logz:.3f}, |dlog var0| = {moved:.4f}"
+        )
+        var0 = new_var0
+        if moved < args.tune_tol:
+            converged = True
+            print(f"  converged at iteration {it} (tol {args.tune_tol})")
+            break
+    if not converged and args.tune_iters > 1:
+        print(
+            f"  note: var0 still moving after {args.tune_iters} iterations "
+            f"(tol {args.tune_tol})"
+        )
+
+    # Select by marginal likelihood, NOT by taking the last iterate. Measured on the
+    # `last2` arm: log Z is best at iteration 1 and gets monotonically *worse* as the
+    # loop runs (-32.0 -> -61.8 over six iterations) while var0 falls 2.07 -> 0.071.
+    # The loop is a runaway, not a fixed point: refitting the MAP under a tighter
+    # prior shrinks the weights, which makes a tighter prior look optimal again
+    # (doc/gotchas/prior-enters-map-fit.md is the same coupling seen from the MAP
+    # side). log Z is the quantity being maximised, so it is what decides.
+    best = max(history, key=lambda h: h["log_marglik"])
+    var0 = best["var0_out"]
+    if best["iter"] != len(history):
+        print(
+            f"  selected iteration {best['iter']} by log Z = "
+            f"{best['log_marglik']:.3f} (last iterate was "
+            f"{history[-1]['var0_out']:.4g} at log Z = "
+            f"{history[-1]['log_marglik']:.3f} - the loop was drifting, not converging)"
+        )
+    print(f"  tuned var0 = {var0:.4g}  (prior_scale = {math.sqrt(var0):.3f})")
+    return replace(cfg, var0=var0), history
+
+
+def run_arm(cfg: Config, spec: ArmSpec, arm_dir: Path, *, args) -> str:
+    """Fit one arm: MAP, Laplace, two VI guides, NUTS; save artifacts and figures."""
+    torch.set_default_dtype(torch.float64)
+    pyro.clear_param_store()
+    set_seed(cfg.seed)
+
+    figure_dir = Path(cfg.figure_dir)
+    figure_dir.mkdir(parents=True, exist_ok=True)
+
+    x_train, y_train = two_moons(cfg.n_train, sigma=cfg.noise)
+    x1_grid, x2_grid, x_test = make_grid(cfg)
+    _, n = x_train.shape
+
+    # Snapshot *after* the data exists, so the guide init below is byte-identical to
+    # what full_bnn_ablation.py draws - and identical across the tuner's refits.
+    rng_state = torch.get_rng_state()
+
+    # --- stage 0: tune the prior scale, if asked ------------------------------
+    tune_history: list[dict] = []
+    var0_initial = cfg.var0
+    if args.tune_prior:
+        cfg, tune_history = tune_var0(
+            cfg, spec, args, x_train, y_train, n, rng_state
+        )
+
+    # --- stage 1: MAP of the latent sites + the deterministic prefix ---------
+    bnn, lap_guide, map_losses = fit_map_stage(
+        cfg, spec, args, x_train, y_train, n, rng_state
+    )
 
     # --- stage 2: the three Gaussian posteriors ------------------------------
     # Each posterior is fitted defensively: for the deeper arms a method can fail
@@ -704,6 +1074,26 @@ def run_arm(cfg: Config, spec: ArmSpec, arm_dir: Path, *, args) -> str:
         method_status[GGN] = f"{type(exc).__name__}: {exc}"
         method_status[GGN_LIN] = method_status[GGN]
         print(f"  FAILED: {method_status[GGN]}")
+
+    # Does TorchArmNet really compute the same model? laplace-torch builds its GGN
+    # from the torch mirror, we build ours from the pyro model; at the same prior
+    # precision the two posterior precisions must agree. Eigenvalues, because each
+    # side flattens the latent in its own order.
+    if args.tune_prior and args.tune_hessian == "full" and ggn_lap is not None:
+        try:
+            la_chk = fit_laplace_torch(
+                TorchArmNet(bnn, map_point(lap_guide)),
+                x_train,
+                y_train,
+                hessian_structure="full",
+                var0=cfg.var0,
+            )
+            print(
+                "  cross-check vs laplace-torch GGN: "
+                f"{check_ggn_against_laplace_torch(la_chk, ggn_lap, cfg.var0)}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"  cross-check vs laplace-torch skipped: {type(exc).__name__}: {exc}")
 
     def fit_vi(guide: Callable, name: str) -> list[float]:
         svi = SVI(
@@ -802,10 +1192,36 @@ def run_arm(cfg: Config, spec: ArmSpec, arm_dir: Path, *, args) -> str:
             f"  (mcmc.summary() suppressed: {bnn.latent_dim} dims > "
             f"--summary-max-dim {args.summary_max_dim}; see mcmc_diagnostics.json)"
         )
-    print(
-        "  reminder: weight-space r_hat is not interpretable for the deeper arms - "
-        "permutation and sign symmetries make equivalent chains disagree."
-    )
+    # NOT the original "r_hat is not interpretable" reminder: frozen per-channel BN
+    # breaks the permutation symmetry that claim rests on (see module docstring), so
+    # these numbers are real. Surface the worst of them rather than excusing them.
+    diag = mcmc.diagnostics()
+    r_hats = [
+        v
+        for site, st in diag.items()
+        if isinstance(st, dict) and "r_hat" in st
+        for v in np.ravel(st["r_hat"]).tolist()
+    ]
+    n_effs = [
+        v
+        for site, st in diag.items()
+        if isinstance(st, dict) and "n_eff" in st
+        for v in np.ravel(st["n_eff"]).tolist()
+    ]
+    div = diag.get("divergences", {})
+    n_div = sum(len(v) for v in div.values()) if isinstance(div, dict) else 0
+    total_draws = cfg.mcmc_samples * cfg.mcmc_chains
+    if r_hats:
+        print(
+            f"  convergence: r_hat max {max(r_hats):.3f} mean {np.mean(r_hats):.3f} | "
+            f"n_eff min {min(n_effs):.1f} mean {np.mean(n_effs):.1f} of "
+            f"{total_draws} draws | divergent {n_div}"
+        )
+        if max(r_hats) > 1.1 or min(n_effs) < 0.02 * total_draws:
+            print(
+                "  WARNING: these chains did not converge. Frozen BN breaks the "
+                "permutation symmetry, so this is a real failure, not relabelling."
+            )
 
     # --- predictive comparison ----------------------------------------------
     print("predictive:")
@@ -908,6 +1324,14 @@ def run_arm(cfg: Config, spec: ArmSpec, arm_dir: Path, *, args) -> str:
         w_samples=w_samples,
         norm=args.norm,
         method_status=method_status,
+        tuning={
+            "enabled": bool(args.tune_prior),
+            "var0_initial": var0_initial,
+            "var0_final": cfg.var0,
+            "prior_scale_final": cfg.prior_scale,
+            "hessian_structure": args.tune_hessian if args.tune_prior else None,
+            "iterations": tune_history,
+        },
     )
     return "ok"
 
@@ -955,6 +1379,7 @@ def save_arm_artifacts(
     *,
     norm: str,
     method_status: dict[str, str],
+    tuning: dict | None = None,
 ) -> Path:
     """Persist one arm in the doc/decisions/0010 layout, plus the frozen prefix."""
     out = Path(cfg.artifact_dir)
@@ -965,6 +1390,7 @@ def save_arm_artifacts(
         "arm": {**asdict(spec), "latent_dim": bnn.latent_dim, "norm": norm,
                 "sites": bnn.bayes_sites},
         "method_status": method_status,
+        "prior_tuning": tuning or {"enabled": False},
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "versions": {
             "python": platform.python_version(),
@@ -1342,6 +1768,70 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "one thread, so up to one chain per core costs no extra wall-clock",
     )
     p.add_argument(
+        "--mcmc-warmup",
+        type=int,
+        default=None,
+        help="override Config.mcmc_warmup. Measured at 1000: the last2 chains were "
+        "still drifting (half-means differing by 1-2 within-chain sd), i.e. not yet "
+        "stationary - warmup also adapts step size and mass matrix, so it is the "
+        "first knob to raise for the deeper arms",
+    )
+    p.add_argument(
+        "--mcmc-samples",
+        type=int,
+        default=None,
+        help="override Config.mcmc_samples (draws kept *per chain*). Total predictive "
+        "draws are mcmc_samples x mcmc_chains, and NUTS uses all of them - "
+        "Config.pred_samples does not apply to it",
+    )
+    p.add_argument(
+        "--pred-chunk",
+        type=int,
+        default=None,
+        help="override Config.pred_chunk (grid points per predictive batch). Peak "
+        "activation memory is total_draws x pred_chunk x h x 8 bytes, so lower this "
+        "when raising the draw count",
+    )
+    g = p.add_argument_group("prior-scale tuning (laplace-torch marginal likelihood)")
+    g.add_argument(
+        "--tune-prior",
+        action="store_true",
+        help="before stage 1, maximise the Laplace log marginal likelihood over the "
+        "prior precision and use the result as var0 for the whole arm",
+    )
+    g.add_argument(
+        "--tune-iters",
+        type=int,
+        default=1,
+        help="MAP<->tune iterations. Default 1: tuning at a fixed MAP is what "
+        "laplace-torch itself does, and iterating was measured to make log Z *worse* "
+        "on the deeper arms (a tighter prior shrinks the MAP, which asks for a "
+        "tighter prior). Raise it to see that drift; the best log Z is selected "
+        "either way, never the last iterate",
+    )
+    g.add_argument(
+        "--tune-tol",
+        type=float,
+        default=0.01,
+        help="stop when |d log var0| between iterations falls below this",
+    )
+    g.add_argument(
+        "--tune-steps",
+        type=int,
+        default=100,
+        help="gradient-ascent steps inside optimize_prior_precision",
+    )
+    g.add_argument(
+        "--tune-lr", type=float, default=0.1, help="lr for optimize_prior_precision"
+    )
+    g.add_argument(
+        "--tune-hessian",
+        choices=("full", "kron", "diag"),
+        default="full",
+        help="laplace-torch hessian_structure; 'full' is d x d and enables the "
+        "cross-check against our own GGN, 'kron'/'diag' are the cheap fallbacks",
+    )
+    p.add_argument(
         "--resume", type=Path, default=None, help="continue an existing ablation folder"
     )
     p.add_argument("--force", action="store_true", help="re-run arms that already ran")
@@ -1375,6 +1865,12 @@ def main(argv: list[str] | None = None) -> None:
         overrides["pred_samples"] = args.pred_samples
     if args.mcmc_chains is not None:
         overrides["mcmc_chains"] = args.mcmc_chains
+    if args.mcmc_warmup is not None:
+        overrides["mcmc_warmup"] = args.mcmc_warmup
+    if args.mcmc_samples is not None:
+        overrides["mcmc_samples"] = args.mcmc_samples
+    if args.pred_chunk is not None:
+        overrides["pred_chunk"] = args.pred_chunk
     if overrides:
         base = replace(base, **overrides)
 
@@ -1388,6 +1884,12 @@ def main(argv: list[str] | None = None) -> None:
         )
         base = Config(**stored["base_config"])
         args.norm = stored["norm"]
+        # The stored base_config holds the *pre-tuning* var0; re-tuning on resume
+        # would repeat the search, so carry the stored switch rather than the CLI's.
+        stored_tuning = stored.get("prior_tuning", {})
+        if stored_tuning:
+            args.tune_prior = bool(stored_tuning.get("enabled", args.tune_prior))
+            args.tune_hessian = stored_tuning.get("hessian_structure", args.tune_hessian)
         print(f"resuming {ablation_dir} with its stored config")
     else:
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M")
@@ -1416,6 +1918,14 @@ def main(argv: list[str] | None = None) -> None:
                 "mcmc_init": args.mcmc_init,
                 "skip_full_rank": args.skip_full_rank,
                 "quick": args.quick,
+                "prior_tuning": {
+                    "enabled": args.tune_prior,
+                    "iters": args.tune_iters,
+                    "tol": args.tune_tol,
+                    "steps": args.tune_steps,
+                    "lr": args.tune_lr,
+                    "hessian_structure": args.tune_hessian,
+                },
                 "arms": [
                     {"name": s.name, "bayes_depth": s.bayes_depth, "latent_dim": d,
                      "dir": p.name, "description": s.description}
@@ -1441,6 +1951,13 @@ def main(argv: list[str] | None = None) -> None:
         f"(warmup {base.mcmc_warmup}) per arm"
         + ("  [--quick: not a result]" if args.quick else "")
     )
+    if args.tune_prior:
+        print(
+            f"prior: TUNED per arm from var0 = {base.var0:.4g} "
+            f"(marglik, {args.tune_hessian} Hessian, <= {args.tune_iters} iters)"
+        )
+    else:
+        print(f"prior: FIXED var0 = {base.var0:.4g} (pass --tune-prior to tune it)")
 
     status: dict[str, str] = {}
     for spec, arm_dir, _ in plan:

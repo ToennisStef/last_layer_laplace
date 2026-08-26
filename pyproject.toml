@@ -10,4 +10,6 @@ dependencies = [
     "seaborn>=0.13.2",
     "torch",
     "pyro-ppl",
+    "laplace-torch>=0.2.2.2",
+    "curvlinops-for-pytorch>=2.0,<3",
 ]
